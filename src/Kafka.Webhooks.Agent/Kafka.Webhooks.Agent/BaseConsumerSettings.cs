@@ -1,6 +1,6 @@
 ﻿namespace Kafka.Webhooks.Agent
 {
-    public class KafkaConsumerSettings
+    public class BaseConsumerSettings
     {
         public int RetryThreshold { get; set; }
 

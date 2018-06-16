@@ -8,11 +8,11 @@ using Serilog;
 
 namespace Kafka.Webhooks.Agent
 {
-    public class Microservice : KafkaConsumer<byte[]>, IMicroservice
+    public class Microservice : BaseConsumer<byte[]>, IMicroservice
     {
         public Microservice(
             ILogger logger, 
-            KafkaConsumerSettings settings, 
+            BaseConsumerSettings settings, 
             CancellationToken cancellationToken, 
             Consumer<string, byte[]> confluentKafkaConsumer) 
             : base(logger, settings, cancellationToken, confluentKafkaConsumer)
@@ -21,6 +21,9 @@ namespace Kafka.Webhooks.Agent
 
         public void Start()
         {
+            RegisterEventHandlers();
+
+            Subscribe();
         }
 
         public void Stop()

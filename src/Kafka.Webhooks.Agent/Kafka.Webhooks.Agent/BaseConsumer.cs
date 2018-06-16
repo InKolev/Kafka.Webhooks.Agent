@@ -9,12 +9,12 @@ using Serilog;
 
 namespace Kafka.Webhooks.Agent
 {
-    public abstract class KafkaConsumer<TMessage> : IDisposable
+    public abstract class BaseConsumer<TMessage> : IDisposable
        where TMessage : class
     {
-        protected KafkaConsumer(
+        protected BaseConsumer(
             ILogger logger,
-            KafkaConsumerSettings settings,
+            BaseConsumerSettings settings,
             CancellationToken cancellationToken,
             Consumer<string, TMessage> confluentKafkaConsumer)
         {
@@ -22,13 +22,24 @@ namespace Kafka.Webhooks.Agent
             Settings = settings;
             CancellationToken = cancellationToken;
             ConfluentKafkaConsumer = confluentKafkaConsumer;
+
+            var capacity = settings.QueueBufferingMaxMessages + 1;
+            MessagesQueue =
+                new Queue<Message<string, TMessage>>(capacity);
+
+            LastReceivedMessagePerTopicPartition =
+                new Dictionary<TopicPartition, Message<string, TMessage>>();
         }
 
         protected ILogger Logger { get; set; }
 
         protected Consumer<string, TMessage> ConfluentKafkaConsumer { get; set; }
 
-        protected KafkaConsumerSettings Settings { get; }
+        protected BaseConsumerSettings Settings { get; }
+
+        protected Queue<Message<string, TMessage>> MessagesQueue { get; set; }
+
+        protected Dictionary<TopicPartition, Message<string, TMessage>> LastReceivedMessagePerTopicPartition { get; set; }
 
         protected CancellationToken CancellationToken { get; }
 
@@ -47,6 +58,59 @@ namespace Kafka.Webhooks.Agent
             ConfluentKafkaConsumer.OnLog += OnLog;
             ConfluentKafkaConsumer.OnPartitionEOF += OnPartitionEof;
             ConfluentKafkaConsumer.OnStatistics += OnStatistics;
+            ConfluentKafkaConsumer.OnMessage += OnMessage;
+        }
+
+        protected virtual void OnMessage(
+            object sender,
+            Message<string, TMessage> message)
+        {
+            this.MessagesQueue.Enqueue(message);
+            this.SetLastReceivedMessagePerTopicPartition(message);
+            if (this.MessagesQueue.Count < this.Settings.QueueBufferingMaxMessages)
+                return;
+            this.ProcessQueue();
+        }
+
+        private void ProcessQueue()
+        {
+            var retryCount = 0;
+            var isProcessed = false;
+            while (!isProcessed)
+            {
+                try
+                {
+                    ++retryCount;
+                    if (ShouldSkipRetriedMessages(retryCount))
+                    {
+                        LogSkippedMessages();
+                       
+                        break;
+                    }
+
+                    isProcessed = TryProcess(MessagesQueue);
+
+                    if (isProcessed)
+                    {
+                        LogProcessedMessages();
+                        
+                    }
+                    else
+                    {
+                        LogRetriedMessages();
+                        BackOff();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LogException(ex);
+                    BackOff();
+                }
+            }
+
+            CommitLastReceivedMessagePerTopicPartition();
+            MessagesQueue.Clear();
+            LastReceivedMessagePerTopicPartition.Clear();
         }
 
         public void Subscribe(IEnumerable<string> topics)
@@ -64,7 +128,7 @@ namespace Kafka.Webhooks.Agent
         public async Task<CommittedOffsets> CommitAsync(
             Message<string, TMessage> message)
         {
-            var (executionTimeMs, commitReport) = 
+            var (executionTimeMs, commitReport) =
                 await ConfluentKafkaConsumer.CommitAsync(message).Measure();
 
             Logger.InformationStructured(new
@@ -133,7 +197,7 @@ namespace Kafka.Webhooks.Agent
         }
 
         private void OnStatistics(
-            object sender, 
+            object sender,
             string statistics)
         {
             Logger.InformationStructured(new
@@ -145,7 +209,7 @@ namespace Kafka.Webhooks.Agent
         }
 
         protected virtual void OnPartitionEof(
-            object sender, 
+            object sender,
             TopicPartitionOffset topicPartitionOffset)
         {
             Logger.InformationStructured(new
@@ -157,7 +221,7 @@ namespace Kafka.Webhooks.Agent
         }
 
         protected virtual void OnLog(
-            object sender, 
+            object sender,
             LogMessage logMessage)
         {
             Logger.InformationStructured(new
@@ -193,7 +257,7 @@ namespace Kafka.Webhooks.Agent
         }
 
         protected virtual void OnPartitionsRevoked(
-            object sender, 
+            object sender,
             List<TopicPartition> revokedTopicPartitions)
         {
             Logger.InformationStructured(new
@@ -216,7 +280,7 @@ namespace Kafka.Webhooks.Agent
         }
 
         protected virtual void OnPartitionsAssigned(
-            object sender, 
+            object sender,
             List<TopicPartition> topicPartitionsToAssign)
         {
             Logger.InformationStructured(new
@@ -237,7 +301,7 @@ namespace Kafka.Webhooks.Agent
                 LogMessage = "Topic partitions assigned successfully."
             });
         }
-        
+
         protected void BackOff()
         {
             Logger.InformationStructured(new
@@ -248,6 +312,110 @@ namespace Kafka.Webhooks.Agent
 
             Task.Delay(Settings.RetryBackoffMilliseconds, CancellationToken)
                 .Wait(CancellationToken);
+        }
+
+        protected abstract bool TryProcess(
+            IEnumerable<Message<string, TMessage>> messages);
+
+        private void SetLastReceivedMessagePerTopicPartition(
+            Message<string, TMessage> message)
+        {
+            var topicPartition = message.TopicPartition;
+            if (!LastReceivedMessagePerTopicPartition.ContainsKey(topicPartition))
+            {
+                LastReceivedMessagePerTopicPartition.Add(topicPartition, message);
+            }
+            else
+            {
+                var cachedMessage = LastReceivedMessagePerTopicPartition[topicPartition];
+                if (message.Offset.Value > cachedMessage.Offset.Value)
+                {
+                    LastReceivedMessagePerTopicPartition[topicPartition] = message;
+                }
+            }
+        }
+
+        private void CommitLastReceivedMessagePerTopicPartition()
+        {
+            foreach (var keyValuePair in LastReceivedMessagePerTopicPartition)
+            {
+                // TODO: Think if you want to await this or not. What are the guarantees in both cases.
+                CommitAsync(keyValuePair.Value);
+            }
+        }
+
+        private bool ShouldSkipRetriedMessages(int retryCount)
+        {
+            if (Settings.SkipRetriedMessagesEnabled)
+            {
+                return retryCount >= Settings.RetryThreshold;
+            }
+
+            return false;
+        }
+
+        private void LogProcessedMessages()
+        {
+            Logger.InformationStructured(new
+            {
+                LogSource = nameof(LogProcessedMessages),
+                LogMessage = "Successfully processed messages batch.",
+                LogData = MessagesQueue.Select(x => new
+                {
+                    x.Topic,
+                    x.Partition,
+                    x.Offset
+                })
+            });
+        }
+
+        private void LogRetriedMessages()
+        {
+            Logger.WarningStructured(new
+            {
+                LogSource = nameof(LogRetriedMessages),
+                LogMessage = "Retrying messages batch.",
+                LogData = MessagesQueue.Select(x => new
+                {
+                    x.Topic,
+                    x.Partition,
+                    x.Offset
+                })
+            });
+        }
+
+        private void LogSkippedMessages()
+        {
+            var logMessage =
+                $"Skipping messages batch because {nameof(Settings.RetryThreshold)} " +
+                $"of {Settings.RetryThreshold} was exceeded.";
+
+            Logger.WarningStructured(new
+            {
+                LogSource = nameof(LogSkippedMessages),
+                LogMessage = logMessage,
+                LogData = MessagesQueue.Select(x => new
+                {
+                    x.Topic,
+                    x.Partition,
+                    x.Offset
+                })
+            });
+        }
+
+        private void LogException(Exception exc)
+        {
+            Logger.ErrorStructured(new
+            {
+                LogSource = nameof(LogException),
+                LogMessage = exc.ToString(),
+                LogData = MessagesQueue.Select(x => new
+                {
+                    x.Topic,
+                    x.Partition,
+                    x.Offset
+                })
+            });
         }
     }
 }
