@@ -10,6 +10,6 @@
 
         public int QueueBufferingMaxMessages { get; set; } = 1;
 
-        public int PollInterval { get; set; } = 100;
+        public int PollIntervalMs { get; set; } = 100;
     }
 }

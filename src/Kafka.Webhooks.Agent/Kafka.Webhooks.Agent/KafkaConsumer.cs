@@ -14,23 +14,19 @@ namespace Kafka.Webhooks.Agent
     {
         protected KafkaConsumer(
             ILogger logger,
-            IStatsCollector statsCollector,
-            Consumer<string, TMessage> confluentConsumer,
             KafkaConsumerSettings settings,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            Consumer<string, TMessage> confluentKafkaConsumer)
         {
             Logger = logger;
-            StatsCollector = statsCollector;
-            ConfluentConsumer = confluentConsumer;
             Settings = settings;
             CancellationToken = cancellationToken;
+            ConfluentKafkaConsumer = confluentKafkaConsumer;
         }
 
         protected ILogger Logger { get; set; }
 
-        protected IStatsCollector StatsCollector { get; }
-
-        protected Consumer<string, TMessage> ConfluentConsumer { get; set; }
+        protected Consumer<string, TMessage> ConfluentKafkaConsumer { get; set; }
 
         protected KafkaConsumerSettings Settings { get; }
 
@@ -38,47 +34,19 @@ namespace Kafka.Webhooks.Agent
 
         public virtual void RegisterEventHandlers()
         {
-            Logger.Information("Registering Base event handlers...");
-
-            ConfluentConsumer.OnError += OnError;
-            ConfluentConsumer.OnConsumeError += OnConsumeError;
-            ConfluentConsumer.OnPartitionsRevoked += OnPartitionsRevoked;
-            ConfluentConsumer.OnPartitionsAssigned += OnPartitionsAssigned;
-            ConfluentConsumer.OnLog += OnLog;
-            ConfluentConsumer.OnPartitionEOF += OnPartitionEof;
-            ConfluentConsumer.OnStatistics += OnStatistics;
-
-            Logger.Information("Base event handlers successfully registered.");
-        }
-
-        private void OnStatistics(object sender, string statistics)
-        {
             Logger.InformationStructured(new
             {
-                LogSource = nameof(OnStatistics),
-                LogData = statistics,
-                LogSender = sender.ToString()
+                LogSource = nameof(RegisterEventHandlers),
+                LogMessage = "Registering event handlers.",
             });
-        }
 
-        private void OnPartitionEof(object sender, TopicPartitionOffset topicPartitionOffset)
-        {
-            Logger.InformationStructured(new
-            {
-                LogSource = nameof(OnPartitionEof),
-                LogData = topicPartitionOffset,
-                LogSender = sender.ToString()
-            });
-        }
-
-        private void OnLog(object sender, LogMessage logMessage)
-        {
-            Logger.InformationStructured(new
-            {
-                LogSource = nameof(OnLog),
-                LogData = logMessage,
-                LogSender = sender.ToString()
-            });
+            ConfluentKafkaConsumer.OnError += OnError;
+            ConfluentKafkaConsumer.OnConsumeError += OnConsumeError;
+            ConfluentKafkaConsumer.OnPartitionsRevoked += OnPartitionsRevoked;
+            ConfluentKafkaConsumer.OnPartitionsAssigned += OnPartitionsAssigned;
+            ConfluentKafkaConsumer.OnLog += OnLog;
+            ConfluentKafkaConsumer.OnPartitionEOF += OnPartitionEof;
+            ConfluentKafkaConsumer.OnStatistics += OnStatistics;
         }
 
         public void Subscribe(IEnumerable<string> topics)
@@ -87,72 +55,52 @@ namespace Kafka.Webhooks.Agent
             {
                 LogSource = nameof(Subscribe),
                 LogData = topics,
+                LogMessage = "Subscribing to topics."
             });
-            
-            ConfluentConsumer.Subscribe(topics);
+
+            ConfluentKafkaConsumer.Subscribe(topics);
         }
 
-        public async Task<CommittedOffsets> Commit(Message<string, TMessage> message)
+        public async Task<CommittedOffsets> CommitAsync(
+            Message<string, TMessage> message)
         {
-            Logger.InformationStructured(new
-            {
-                LogSource = nameof(Commit),
-                LogData = message.TopicPartitionOffset,
-                LogMessage = "Committing offset."
-            });
-
-            var (x,a) =  await ConfluentConsumer.CommitAsync(message).Measure();
+            var (executionTimeMs, commitReport) = 
+                await ConfluentKafkaConsumer.CommitAsync(message).Measure();
 
             Logger.InformationStructured(new
             {
-                LogSource = nameof(Commit),
+                LogSource = nameof(CommitAsync),
                 LogData = commitReport,
-                LogMessage = "Commit report."
+                LogMessage = $"CommitAsync execution time: {executionTimeMs} ms.",
             });
 
             return commitReport;
         }
 
-        public async Task<CommittedOffsets> Commit(IEnumerable<TopicPartitionOffset> topicPartitionOffsets)
+        public async Task<CommittedOffsets> CommitAsync(
+            IEnumerable<TopicPartitionOffset> topicPartitionOffsets)
         {
-            Logger.InformationStructured(new
-            {
-                LogSource = nameof(Commit),
-                LogData = topicPartitionOffsets,
-                LogMessage = "Committing offsets."
-            });
-
-            var commitReport = await ConfluentConsumer.CommitAsync(topicPartitionOffsets);
+            var (executionTimeMs, commitReport) =
+                await ConfluentKafkaConsumer.CommitAsync(topicPartitionOffsets).Measure();
 
             Logger.InformationStructured(new
             {
-                LogSource = nameof(Commit),
+                LogSource = nameof(CommitAsync),
                 LogData = commitReport,
-                LogMessage = "Commit report."
+                LogMessage = $"CommitAsync execution time: {executionTimeMs} ms.",
             });
-
-            Logger.Information("Committing offset for: {@TopicPartitionOffset}...", topicPartitionOffsets);
-
-            //var (executionTime, result) = await ConfluentConsumer.CommitAsync(topicPartitionOffsets).Measure();
-
-            var commitReport = await Stats.Time(
-                async () => await ConfluentConsumer.CommitAsync(topicPartitionOffsets),
-                $"{nameof(ConfluentConsumer.CommitAsync)}.ExecutionTime");
-
-            Logger.Information("Commit report: {@CommitReport}.", commitReport);
 
             return commitReport;
         }
 
         public void StartPolling()
         {
-            Logger.Information("Start listening for messages...");
+            Logger.Information("Started polling for messages.");
 
             while (!CancellationToken.IsCancellationRequested)
             {
-                Stats.Time(
-                    () => ConfluentConsumer.Poll(TimeSpan.FromMilliseconds(Settings.PollInterval)),
-                    $"{nameof(ConfluentConsumer.Poll)}.ExecutionTime");
+                ConfluentKafkaConsumer.Poll(
+                    TimeSpan.FromMilliseconds(Settings.PollIntervalMs));
             }
 
             Logger.Information("Listening stopped gracefully.");
@@ -168,54 +116,138 @@ namespace Kafka.Webhooks.Agent
         {
             if (disposing)
             {
-                Logger.Information("Disposing BaseKafkaConsumer...");
+                Logger.InformationStructured(new
+                {
+                    LogSource = nameof(Dispose),
+                    LogMessage = $"Disposing {nameof(ConfluentKafkaConsumer)}."
+                });
 
-                ConfluentConsumer?.Dispose();
+                ConfluentKafkaConsumer?.Dispose();
 
-                Logger.Information("Disposed BaseKafkaConsumer successfully.");
+                Logger.InformationStructured(new
+                {
+                    LogSource = nameof(Dispose),
+                    LogMessage = $"{nameof(ConfluentKafkaConsumer)} successfully disposed."
+                });
             }
         }
 
-        protected void OnPartitionsRevoked(object sender, List<TopicPartition> e)
+        private void OnStatistics(
+            object sender, 
+            string statistics)
         {
-            Logger.Information("Revoking partitions...");
-
-            ConfluentConsumer.Unassign();
-
-            Logger.Information("Partitions revoked successfully: {@Partitions}", e);
+            Logger.InformationStructured(new
+            {
+                LogSource = nameof(OnStatistics),
+                LogData = statistics,
+                LogSender = sender.ToString()
+            });
         }
 
-        protected void OnPartitionsAssigned(object sender, List<TopicPartition> e)
+        protected virtual void OnPartitionEof(
+            object sender, 
+            TopicPartitionOffset topicPartitionOffset)
         {
-            Logger.Information("Assigning partitions...");
-
-            ConfluentConsumer.Assign(e);
-
-            Logger.Information("Partitions assigned: {@Partitions}", e);
+            Logger.InformationStructured(new
+            {
+                LogSource = nameof(OnPartitionEof),
+                LogData = topicPartitionOffset,
+                LogSender = sender.ToString()
+            });
         }
 
-        protected void OnConsumeError(object sender, Message e)
+        protected virtual void OnLog(
+            object sender, 
+            LogMessage logMessage)
         {
-            Logger.Information("Consume error: {@Error}", e);
+            Logger.InformationStructured(new
+            {
+                LogSource = nameof(OnLog),
+                LogData = logMessage,
+                LogSender = sender.ToString()
+            });
         }
 
-        protected void OnError(object sender, Error e)
+        protected virtual void OnConsumeError(
+            object sender,
+            Message message)
         {
-            Logger.Information("General error: {@Error}", e);
+            Logger.InformationStructured(new
+            {
+                LogSource = nameof(OnConsumeError),
+                LogData = message,
+                LogSender = sender.ToString(),
+            });
         }
 
-        /// <summary>
-        /// Waiting a configurable amount of time before continuing execution 
-        /// in hope that if the failure was result from network connectivity issues
-        /// the system will have time to restore it's working state automatically.
-        /// </summary>
+        protected virtual void OnError(
+            object sender,
+            Error error)
+        {
+            Logger.InformationStructured(new
+            {
+                LogSource = nameof(OnError),
+                LogData = error,
+                LogSender = sender.ToString(),
+            });
+        }
+
+        protected virtual void OnPartitionsRevoked(
+            object sender, 
+            List<TopicPartition> revokedTopicPartitions)
+        {
+            Logger.InformationStructured(new
+            {
+                LogSource = nameof(OnPartitionsRevoked),
+                LogData = revokedTopicPartitions,
+                LogSender = sender.ToString(),
+                LogMessage = "Revoking topic partitions."
+            });
+
+            ConfluentKafkaConsumer.Unassign();
+
+            Logger.InformationStructured(new
+            {
+                LogSource = nameof(OnPartitionsRevoked),
+                LogData = revokedTopicPartitions,
+                LogSender = sender.ToString(),
+                LogMessage = "Topic partitions revoked successfully."
+            });
+        }
+
+        protected virtual void OnPartitionsAssigned(
+            object sender, 
+            List<TopicPartition> topicPartitionsToAssign)
+        {
+            Logger.InformationStructured(new
+            {
+                LogSource = nameof(OnPartitionsAssigned),
+                LogData = topicPartitionsToAssign,
+                LogSender = sender.ToString(),
+                LogMessage = "Assigning topic partitions."
+            });
+
+            ConfluentKafkaConsumer.Assign(topicPartitionsToAssign);
+
+            Logger.InformationStructured(new
+            {
+                LogSource = nameof(OnPartitionsAssigned),
+                LogData = topicPartitionsToAssign,
+                LogSender = sender.ToString(),
+                LogMessage = "Topic partitions assigned successfully."
+            });
+        }
+        
         protected void BackOff()
         {
-            Logger.Information(
-                "Backing off for {@BackOffMilliseconds} ms.",
-                Settings.BackOffOnTryProcessFailureInMilliseconds);
+            Logger.InformationStructured(new
+            {
+                LogSource = nameof(BackOff),
+                LogMessage = $"Backing off for {Settings.RetryBackoffMilliseconds} ms."
+            });
 
-            Task.Delay(Settings.BackOffOnTryProcessFailureInMilliseconds, CancellationToken).Wait(CancellationToken);
+            Task.Delay(Settings.RetryBackoffMilliseconds, CancellationToken)
+                .Wait(CancellationToken);
         }
     }
 }

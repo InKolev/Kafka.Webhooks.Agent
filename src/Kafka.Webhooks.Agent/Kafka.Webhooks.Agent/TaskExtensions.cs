@@ -11,8 +11,8 @@ namespace Kafka.Webhooks.Agent
             var result = await task;
             stopwatch.Stop();
 
-            var executionTimeInMs = stopwatch.Elapsed.TotalMilliseconds;
-            return (executionTimeInMs, result);
+            var executionTimeMs = stopwatch.Elapsed.TotalMilliseconds;
+            return (executionTimeMs, result);
         }
 
         public static async Task<double> Measure(this Task task)
@@ -21,8 +21,8 @@ namespace Kafka.Webhooks.Agent
             await task;
             stopwatch.Stop();
 
-            var executionTimeInMs = stopwatch.Elapsed.TotalMilliseconds;
-            return executionTimeInMs;
+            var executionTimeMs = stopwatch.Elapsed.TotalMilliseconds;
+            return executionTimeMs;
         }
     }
 }
