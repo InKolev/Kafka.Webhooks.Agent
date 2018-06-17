@@ -1,0 +1,18 @@
+﻿{
+  "Serilog": {
+    "WriteTo": [
+      {
+        "Name": "Console"
+      },
+      {
+        "Name": "RollingFile",
+        "Args": {
+          "pathFormat": "MicroServiceLogs-{Hour}.txt",
+          "buffered": false,
+          "formatter": "Serilog.Formatting.Compact.CompactJsonFormatter, Serilog.Formatting.Compact",
+          "retainedFileCountLimit": 48
+        }
+      }
+    ]
+  }
+}

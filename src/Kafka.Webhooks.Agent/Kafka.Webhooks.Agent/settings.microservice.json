@@ -1,0 +1,26 @@
+﻿{
+  "ConfluentConsumerSettings": {
+    "group.id": "KafkaWebhooksAgent",
+    "bootstrap.servers": [
+      "PLAINTEXT://kafka-test-b0.3x3insights.com:9092",
+      "PLAINTEXT://kafka-test-b1.3x3insights.com:9092",
+      "PLAINTEXT://kafka-test-b2.3x3insights.com:9092"
+    ],
+    "enable.auto.commit": false,
+    "auto.commit.interval.ms": 5000,
+    "statistics.interval.ms": 60000,
+    "socket.blocking.max.ms": 1,
+    "auto.offset.reset": "smallest"
+  },
+
+  "BaseConsumerSettings": {
+    "SkipRetriedMessagesEnabled": true,
+    "RetryThreshold": 3,
+    "QueueBufferingMaxMessages": 1,
+    "BackOffOnTryProcessFailureInMilliseconds": 1000
+  },
+
+  "KafkaWebhooksAgentSettings": {
+    "Topics": [ "WebhookTopic", "YetAnotherWebhookTopic" ]
+  }
+}

@@ -14,16 +14,16 @@ namespace Kafka.Webhooks.Agent
     {
         protected BaseConsumer(
             ILogger logger,
-            BaseConsumerSettings settings,
+            BaseConsumerSettings consumerSettings,
             CancellationToken cancellationToken,
             Consumer<string, TMessage> confluentKafkaConsumer)
         {
             Logger = logger;
-            Settings = settings;
+            ConsumerSettings = consumerSettings;
             CancellationToken = cancellationToken;
             ConfluentKafkaConsumer = confluentKafkaConsumer;
 
-            var capacity = settings.QueueBufferingMaxMessages + 1;
+            var capacity = consumerSettings.QueueBufferingMaxMessages + 1;
             MessagesQueue =
                 new Queue<Message<string, TMessage>>(capacity);
 
@@ -35,7 +35,7 @@ namespace Kafka.Webhooks.Agent
 
         protected Consumer<string, TMessage> ConfluentKafkaConsumer { get; set; }
 
-        protected BaseConsumerSettings Settings { get; }
+        protected BaseConsumerSettings ConsumerSettings { get; }
 
         protected Queue<Message<string, TMessage>> MessagesQueue { get; set; }
 
@@ -65,11 +65,12 @@ namespace Kafka.Webhooks.Agent
             object sender,
             Message<string, TMessage> message)
         {
-            this.MessagesQueue.Enqueue(message);
-            this.SetLastReceivedMessagePerTopicPartition(message);
-            if (this.MessagesQueue.Count < this.Settings.QueueBufferingMaxMessages)
-                return;
-            this.ProcessQueue();
+            MessagesQueue.Enqueue(message);
+            SetLastReceivedMessagePerTopicPartition(message);
+            if (MessagesQueue.Count >= ConsumerSettings.QueueBufferingMaxMessages)
+            {
+                ProcessQueue();
+            }
         }
 
         private void ProcessQueue()
@@ -84,7 +85,6 @@ namespace Kafka.Webhooks.Agent
                     if (ShouldSkipRetriedMessages(retryCount))
                     {
                         LogSkippedMessages();
-                       
                         break;
                     }
 
@@ -93,7 +93,6 @@ namespace Kafka.Webhooks.Agent
                     if (isProcessed)
                     {
                         LogProcessedMessages();
-                        
                     }
                     else
                     {
@@ -159,15 +158,23 @@ namespace Kafka.Webhooks.Agent
 
         public void StartPolling()
         {
-            Logger.Information("Started polling for messages.");
+            Logger.InformationStructured(new
+            {
+                LogSource = nameof(StartPolling),
+                LogMessage = "Started polling for messages."
+            });
 
             while (!CancellationToken.IsCancellationRequested)
             {
                 ConfluentKafkaConsumer.Poll(
-                    TimeSpan.FromMilliseconds(Settings.PollIntervalMs));
+                    TimeSpan.FromMilliseconds(ConsumerSettings.PollIntervalMs));
             }
 
-            Logger.Information("Listening stopped gracefully.");
+            Logger.InformationStructured(new
+            {
+                LogSource = nameof(StartPolling),
+                LogMessage = "Polling stopped gracefully."
+            });
         }
 
         public void Dispose()
@@ -307,10 +314,10 @@ namespace Kafka.Webhooks.Agent
             Logger.InformationStructured(new
             {
                 LogSource = nameof(BackOff),
-                LogMessage = $"Backing off for {Settings.RetryBackoffMilliseconds} ms."
+                LogMessage = $"Backing off for {ConsumerSettings.RetryBackoffMilliseconds} ms."
             });
 
-            Task.Delay(Settings.RetryBackoffMilliseconds, CancellationToken)
+            Task.Delay(ConsumerSettings.RetryBackoffMilliseconds, CancellationToken)
                 .Wait(CancellationToken);
         }
 
@@ -346,9 +353,9 @@ namespace Kafka.Webhooks.Agent
 
         private bool ShouldSkipRetriedMessages(int retryCount)
         {
-            if (Settings.SkipRetriedMessagesEnabled)
+            if (ConsumerSettings.SkipRetriedMessagesEnabled)
             {
-                return retryCount >= Settings.RetryThreshold;
+                return retryCount >= ConsumerSettings.RetryThreshold;
             }
 
             return false;
@@ -387,8 +394,8 @@ namespace Kafka.Webhooks.Agent
         private void LogSkippedMessages()
         {
             var logMessage =
-                $"Skipping messages batch because {nameof(Settings.RetryThreshold)} " +
-                $"of {Settings.RetryThreshold} was exceeded.";
+                $"Skipping messages batch because {nameof(ConsumerSettings.RetryThreshold)} " +
+                $"of {ConsumerSettings.RetryThreshold} was exceeded.";
 
             Logger.WarningStructured(new
             {

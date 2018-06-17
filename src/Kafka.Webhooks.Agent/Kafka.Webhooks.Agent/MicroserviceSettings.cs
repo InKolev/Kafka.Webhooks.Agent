@@ -5,5 +5,7 @@
         public BaseConsumerSettings BaseConsumerSettings { get; set; }
 
         public ConfluentConsumerSettings ConfluentConsumerSettings { get; set; }
+
+        public KafkaWebhooksAgentSettings KafkaWebhooksAgentSettings { get; set; }
     }
 }

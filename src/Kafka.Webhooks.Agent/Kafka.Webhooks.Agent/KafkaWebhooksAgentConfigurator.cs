@@ -6,7 +6,7 @@ using Newtonsoft.Json.Linq;
 
 namespace Kafka.Webhooks.Agent
 {
-    public class MicroserviceConfigurator : IMicroserviceConfigurator
+    public class KafkaWebhooksAgentConfigurator : IMicroserviceConfigurator
     {
         public ContainerBuilder Configure(
             ContainerBuilder containerBuilder, 
@@ -17,6 +17,10 @@ namespace Kafka.Webhooks.Agent
             RegisterBaseConsumerSettings(
                 containerBuilder, 
                 microserviceSettings.BaseConsumerSettings);
+
+            RegisterKafkaWebhooksAgentSettings(
+                containerBuilder,
+                microserviceSettings.KafkaWebhooksAgentSettings);
 
             RegisterConfluentKafkaConsumer(
                 containerBuilder, 
@@ -31,6 +35,14 @@ namespace Kafka.Webhooks.Agent
         {
             containerBuilder.RegisterInstance(settings)
                 .As<BaseConsumerSettings>();
+        }
+
+        private static void RegisterKafkaWebhooksAgentSettings(
+            ContainerBuilder containerBuilder,
+            KafkaWebhooksAgentSettings settings)
+        {
+            containerBuilder.RegisterInstance(settings)
+                .As<KafkaWebhooksAgentSettings>();
         }
 
         private static void RegisterConfluentKafkaConsumer(

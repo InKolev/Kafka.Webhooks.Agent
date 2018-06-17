@@ -7,8 +7,6 @@ namespace Kafka.Webhooks.Agent
     {
         void Start();
 
-        void Stop();
-
         Task<HealthStatusResponse> CheckHealthAsync();
     }
 }
